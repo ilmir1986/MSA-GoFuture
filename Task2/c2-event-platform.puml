@@ -1,0 +1,137 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+Person(passenger, "Пассажир", "Мобильное приложение")
+Person(driver, "Водитель", "Мобильное приложение")
+
+System_Boundary(gofuture, "GoFuture Platform — Event-Driven Architecture") {
+
+    ' === 8 Доменных сервисов с БД ===
+    Container(booking_svc, "Booking Service", "Spring Boot", "Управление поездками, матчинг")
+    ContainerDb(booking_db, "Booking DB", "PostgreSQL 11", "Бронирования, поездки")
+
+    Container(driver_svc, "Driver Service", "Spring Boot", "Профили, статусы, геопозиции")
+    ContainerDb(driver_db, "Driver DB", "PostgreSQL 11", "Водители, доступность")
+
+    Container(pricing_svc, "Pricing Service", "Spring Boot", "Динамические тарифы")
+    ContainerDb(pricing_db, "Pricing DB", "PostgreSQL 11", "Правила цен, мультипликаторы")
+
+    Container(payment_svc, "Payment Service", "Spring Boot", "Транзакции, биллинг")
+    ContainerDb(payment_db, "Payment DB", "PostgreSQL 11", "Платежи, холды")
+
+    Container(notification_svc, "Notification Service", "Spring Boot", "Мультиканальные оповещения")
+    ContainerDb(notification_db, "Notification DB", "PostgreSQL 11", "Шаблоны, логи доставки")
+
+    Container(geography_svc, "Geography Service", "Spring Boot", "Маршруты, геокодинг")
+    ContainerDb(geography_db, "Geography DB", "PostgreSQL 11", "Зоны, справочники")
+
+    Container(fraud_svc, "Fraud Service", "Spring Boot", "Скоринг рисков")
+    ContainerDb(fraud_db, "Fraud DB", "PostgreSQL 11", "Правила фрода, алерты")
+
+    Container(analytics_svc, "Analytics Service", "Spring Boot", "BI, агрегация")
+    ContainerDb(analytics_dw, "Analytics DW", "ClickHouse", "OLAP, отчёты")
+
+    ' === Инфраструктура событий ===
+    ContainerQueue(kafka, "Kafka Cluster", "Apache Kafka", "Event Bus: <region>.<domain>.<event>")
+    Container(camunda, "Camunda Orchestrator", "Camunda Platform 8", "Saga-оркестрация")
+    Container(flink, "Flink Cluster", "Apache Flink", "Stream processing: агрегации, окна, enrichment")
+}
+
+' === Observability Stack (Grafana Ecosystem) — отдельный контур ===
+System_Boundary(observability_boundary, "Observability Stack — Grafana Ecosystem") {
+    Container(prometheus, "Prometheus", "Prometheus", "Сбор метрик: service discovery, scrape, TSDB")
+    Container(grafana, "Grafana", "Grafana", "Визуализация: дашборды, алертинг, annotations")
+    Container(loki, "Loki", "Loki", "Агрегация логов: label-based indexing, logQL")
+    Container(tempo, "Tempo", "Tempo", "Distributed tracing: OTLP, trace-to-metrics/logs")
+    Container(alertmanager, "Alertmanager", "Alertmanager", "Маршрутизация алертов: dedup, silencing, routing")
+
+    Container(kafka_exporter, "Kafka Exporter", "Prometheus Exporter", "Метрики: consumer lag, throughput, ISR")
+    Container(flink_exporter, "Flink Exporter", "JMX/Prometheus", "Метрики: latency, backpressure, checkpoints")
+    Container(camunda_exporter, "Camunda Exporter", "Prometheus Reporter", "Метрики: process instances, failed jobs")
+}
+
+' === Связи: Сервисы → БД ===
+Rel(booking_svc, booking_db, "Read/Write", "SQL")
+Rel(driver_svc, driver_db, "Read/Write", "SQL")
+Rel(pricing_svc, pricing_db, "Read/Write", "SQL")
+Rel(payment_svc, payment_db, "Read/Write", "SQL")
+Rel(notification_svc, notification_db, "Read/Write", "SQL")
+Rel(geography_svc, geography_db, "Read/Write", "SQL")
+Rel(fraud_svc, fraud_db, "Read/Write", "SQL")
+Rel(analytics_svc, analytics_dw, "Stream/Batch Load", "SQL")
+
+' === Связи: Сервисы → Kafka (Publish Events) ===
+Rel(booking_svc, kafka, "Publish: BookingCreated, BookingCancelled, BookingReassigned")
+Rel(driver_svc, kafka, "Publish: DriverLocationUpdated, DriverAssigned, DriverRejected, RideCompleted")
+Rel(pricing_svc, kafka, "Publish: PriceRecalculated, PricingFailed")
+Rel(payment_svc, kafka, "Publish: PaymentInitiated, PaymentAuthorized, RefundInitiated, PaymentFailed")
+Rel(notification_svc, kafka, "Publish: NotificationSent, DeliveryFailed")
+Rel(fraud_svc, kafka, "Publish: RiskFlagged")
+Rel(geography_svc, kafka, "Publish: GeoZoneUpdated")
+
+' === Связи: Kafka → Потребители ===
+Rel(kafka, camunda, "Consume: BookingCreated, DriverRejected, PaymentFailed, RiskFlagged")
+Rel(kafka, flink, "Stream: All domain events for real-time processing")
+Rel(kafka, analytics_svc, "Stream: All events → ClickHouse for BI/ML")
+
+' === Связи: Flink → Kafka (Enriched Output) ===
+Rel(flink, kafka, "Publish: Enriched events (DriverAvailabilityScore, DemandForecast)")
+
+' === Связи: Camunda → Сервисы (Saga Commands) ===
+Rel(camunda, driver_svc, "Command: AssignDriver / Release", "gRPC")
+Rel(camunda, payment_svc, "Command: Authorize / Refund / Capture", "gRPC")
+Rel(camunda, booking_svc, "Command: Cancel / Confirm / Reassign", "gRPC")
+Rel(camunda, notification_svc, "Command: SendStatusUpdate", "HTTP")
+
+' === Observability: Сбор метрик (Prometheus Scraping) ===
+Rel(prometheus, booking_svc, "Scrape: /actuator/prometheus", "HTTP")
+Rel(prometheus, driver_svc, "Scrape: /actuator/prometheus", "HTTP")
+Rel(prometheus, pricing_svc, "Scrape: /actuator/prometheus", "HTTP")
+Rel(prometheus, payment_svc, "Scrape: /actuator/prometheus", "HTTP")
+Rel(prometheus, kafka_exporter, "Scrape: /metrics", "HTTP")
+Rel(prometheus, flink_exporter, "Scrape: /metrics", "HTTP")
+Rel(prometheus, camunda_exporter, "Scrape: /metrics", "HTTP")
+
+' === Observability: Отправка логов (Loki) ===
+Rel(booking_svc, loki, "Push: Structured logs via Promtail", "HTTP")
+Rel(driver_svc, loki, "Push: Structured logs via Promtail", "HTTP")
+Rel(kafka, loki, "Push: Broker logs", "HTTP")
+Rel(flink, loki, "Push: TaskManager logs", "HTTP")
+Rel(camunda, loki, "Push: Process engine logs", "HTTP")
+
+' === Observability: Отправка трейсов (Tempo/OTLP) ===
+Rel(booking_svc, tempo, "Export: OpenTelemetry traces", "OTLP/gRPC")
+Rel(driver_svc, tempo, "Export: OpenTelemetry traces", "OTLP/gRPC")
+Rel(payment_svc, tempo, "Export: OpenTelemetry traces", "OTLP/gRPC")
+
+' === Observability: Визуализация и алертинг ===
+Rel(grafana, prometheus, "Query: Metrics", "PromQL")
+Rel(grafana, loki, "Query: Logs", "LogQL")
+Rel(grafana, tempo, "Query: Traces", "TraceQL")
+Rel(prometheus, alertmanager, "Send: Alert rules", "HTTP")
+Rel(alertmanager, notification_svc, "Notify: Slack/PagerDuty/Email", "Webhook")
+
+' === Пояснение каталога событий ===
+Note as NoteCatalog
+<b>Расширенный каталог событий:</b>
+<b>Happy Path:</b> BookingCreated → DriverAssigned → PaymentAuthorized → RideCompleted
+<b>Errors:</b> DriverRejected, DriverTimeout, PaymentFailed, PricingFailed, RiskFlagged
+<b>Compensation:</b> BookingCancelled, RefundInitiated, BookingReassigned
+Camunda управляет переходами, retry-логикой и компенсирующими транзакциями.
+end note
+
+Rel(camunda, NoteCatalog, "Реализует логику")
+Rel(kafka, NoteCatalog, "Транспортирует")
+
+' === Пояснение Observability ===
+Note right of observability_boundary
+<b>Grafana Stack:</b>
+• Prometheus: сбор метрик (scrape interval 15s)
+• Grafana: дашборды (SLO, business KPIs, infra)
+• Loki: логи с label-based indexing
+• Tempo: distributed tracing (trace-to-metrics)
+• Alertmanager: маршрутизация алертов по командам
+end note
+
+LAYOUT_WITH_LEGEND()
+@enduml

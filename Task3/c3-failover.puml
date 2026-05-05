@@ -1,0 +1,39 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+Container_Boundary(region_active, "Активный регион (SEA/LatAm)") {
+    Component(gw, "API Gateway", "Spring Cloud Gateway")
+    Component(svc, "Микросервисы", "Booking, Driver, Pricing...")
+    ComponentDb(db_master, "DB Master", "PostgreSQL")
+    ComponentDb(db_replica, "DB Replica", "PostgreSQL")
+    Component(kafka, "Kafka", "MM2 sync")
+}
+
+Container_Boundary(region_standby, "Резервный регион (Hub/DR)") {
+    ComponentDb(db_replica_dr, "DB Replica", "PostgreSQL (read-only)")
+    Component(failover_ctrl, "Failover Controller", "Consul + Orchestrator")
+}
+
+System_Ext(gslb, "GSLB / DNS", "Cloudflare / Route53")
+
+Rel(gslb, gw, "Маршрутизация", "HTTPS")
+Rel(gw, svc, "Forward")
+Rel(svc, db_master, "Read/Write")
+Rel(db_master, db_replica, "Async Replication")
+Rel(db_master, db_replica_dr, "Cross-Region Replication")
+Rel(svc, kafka, "Events")
+
+Rel(failover_ctrl, db_replica, "Promote if master down")
+Rel(failover_ctrl, gslb, "Update DNS on failover")
+
+note right of failover_ctrl
+    Точки отказа:
+    • DB Master
+    • Kafka Broker
+    • Gateway
+    Механизмы:
+    • Health Checks (2s)
+    • Auto-promote replica
+    • DNS re-route
+end note
+@enduml
