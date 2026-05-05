@@ -1,0 +1,38 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+Person(partner_admin, "Админ партнёра")
+System(self_service_portal, "Self-Service Portal", "React + Spring Boot", "Регистрация, настройка, управление тенантом")
+
+Container_Boundary(platform, "GoFuture Platform") {
+    Component(onboarding_svc, "Onboarding Service", "Spring Boot", "Оркестрация процесса подключения")
+    Component(iam, "IAM / Keycloak", "Keycloak", "Создание клиента, ролей, политик")
+    Component(provisioner, "Tenant Provisioner", "Terraform + Ansible", "Создание БД/схемы, конфиги, namespace")
+    Component(config_srv, "Config Server", "Spring Cloud Config", "Push конфигурации для тенанта")
+    Component(monitoring, "Monitoring Agent", "Prometheus Operator", "Разметка метрик tenant_id")
+}
+
+System_Ext(partner_idp, "IdP партнёра", "Azure AD / Okta / Keycloak", "Опционально: федерация через SAML")
+
+Rel(partner_admin, self_service_portal, "Заполняет форму онбординга", "HTTPS")
+Rel(self_service_portal, onboarding_svc, "Запускает процесс", "REST")
+
+Rel(onboarding_svc, iam, "Создаёт OIDC-клиент, роли", "Admin API")
+Rel(onboarding_svc, provisioner, "Провижинит БД/схему, namespace", "Terraform API")
+Rel(onboarding_svc, config_srv, "Push конфигурации (фичи, лимиты)", "GitOps")
+Rel(onboarding_svc, monitoring, "Добавляет tenant_id в метрики", "Label injection")
+
+Rel(iam, partner_idp, "Настраивает федерацию (опционально)", "SAML/OIDC")
+Rel(onboarding_svc, self_service_portal, "Возвращает API-ключи, дашборд", "REST")
+
+note right of onboarding_svc
+    Шаги онбординга:
+    1. Валидация данных партнёра
+    2. Создание IAM-клиента и ролей
+    3. Провижининг БД/схемы
+    4. Генерация API-ключей
+    5. Настройка мониторинга
+    6. Отправка приветствия
+    7. Активация тенанта
+end note
+@enduml

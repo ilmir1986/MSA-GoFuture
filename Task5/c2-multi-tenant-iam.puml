@@ -1,0 +1,72 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+Person(partner_user, "Пользователь партнёра", "Мобильное / Веб-приложение")
+Person(platform_admin, "Админ платформы", "Admin Portal")
+
+System_Boundary(gofuture, "GoFuture Platform — Multi-Tenant") {
+    Container(gateway, "API Gateway", "Spring Cloud Gateway", "Auth, Routing, Tenant Resolution")
+    Container(iam, "IAM / Keycloak", "Keycloak", "OIDC/OAuth2, RBAC/ABAC, SSO Federation")
+
+    Container_Boundary(services, "Domain Services (multi-tenant aware)") {
+        Container(booking_svc, "Booking Service", "Spring Boot + PostgreSQL", "Фильтрация по tenant_id")
+        Container(driver_svc, "Driver Service", "Spring Boot + PostgreSQL")
+        Container(pricing_svc, "Pricing Service", "Spring Boot + Redis")
+        Container(payment_svc, "Payment Service", "Spring Boot + PostgreSQL")
+    }
+
+    Container(onboarding_svc, "Onboarding Service", "Spring Boot", "Оркестрация подключения партнёров")
+    Container(provisioner, "Tenant Provisioner", "Terraform + Ansible", "Автоматический провижининг")
+
+    ContainerDb(multi_tenant_db, "Multi-Tenant PostgreSQL", "PostgreSQL 11", "Schema-per-tenant + RLS")
+    ContainerDb(feature_flags, "Feature Flags Store", "Redis", "Кастомизация функциональности на тенанта")
+}
+
+System_Ext(partner_idp, "IdP партнёра", "Azure AD / Okta", "Опциональная федерация через SAML")
+System_Ext(monitoring, "Monitoring Stack", "Prometheus + Grafana + Loki", "tenant_id-aware метрики и логи")
+
+' Аутентификация
+Rel(partner_user, iam, "Login / SSO", "OIDC/SAML")
+Rel(iam, partner_idp, "Federation (optional)", "SAML/OIDC")
+Rel(iam, gateway, "JWT с tenant_id и roles", "HTTPS")
+
+' Маршрутизация с tenant context
+Rel(gateway, booking_svc, "Запрос с X-Tenant-Id", "gRPC/HTTP")
+Rel(gateway, driver_svc, "Запрос с X-Tenant-Id", "gRPC/HTTP")
+
+' Изоляция данных
+Rel(booking_svc, multi_tenant_db, "Запросы с tenant_id-фильтрацией", "SQL + RLS")
+Rel(driver_svc, multi_tenant_db, "Запросы с tenant_id-фильтрацией", "SQL + RLS")
+
+' Онбординг
+Rel(platform_admin, onboarding_svc, "Запускает онбординг", "Admin API")
+Rel(onboarding_svc, iam, "Создаёт OIDC-клиент", "Admin API")
+Rel(onboarding_svc, provisioner, "Провижинит БД/схему", "Terraform")
+Rel(onboarding_svc, feature_flags, "Настраивает фичи для тенанта", "Redis")
+
+' Мониторинг
+Rel(booking_svc, monitoring, "Метрики с tenant_id", "Prometheus")
+Rel(driver_svc, monitoring, "Логи с tenant_id", "Loki")
+
+note right of gateway
+    Tenant Resolution:
+    • Из JWT claims или API-ключа
+    • Добавление X-Tenant-Id заголовка
+    • Валидация активности тенанта
+end note
+
+note right of multi_tenant_db
+    Изоляция данных:
+    • Schema-per-tenant или RLS
+    • Автоматическая фильтрация по tenant_id
+    • Шифрование ключей на тенант (Vault)
+end note
+
+note right of onboarding_svc
+    Автоматизация онбординга:
+    • Self-Service Portal
+    • GitOps-конфигурация
+    • Уведомления и дашборды
+end note
+
+@enduml

@@ -1,0 +1,96 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+Person(passenger, "Пассажир", "Заказывает, отслеживает и оплачивает поездки")
+Person(driver, "Водитель", "Принимает заказы, управляет поездками\nи получает выплаты")
+Person(manager, "Корпоративный менеджер", "Управляет корпоративными поездками и счетами")
+Person(accountant, "Бухгалтер", "Контролирует выплаты водителям")
+
+System_Boundary(gofuture, "GoFuture Platform (To-Be)") {
+    Container(gateway, "API Gateway", "Spring Cloud Gateway", "Маршрутизация, API Versioning, Feature Flags, Circuit Breaker")
+
+    Container(booking_svc, "Booking Service", "Spring Boot", "Управление поездками, матчинг")
+    ContainerDb(booking_db, "Booking Database", "PostgreSQL 11", "Данные бронирований и поездок")
+
+    Container(driver_svc, "Driver Service", "Spring Boot", "Профили, статусы, геопозиции")
+    ContainerDb(driver_db, "Driver Database", "PostgreSQL 11", "Профили водителей, статусы")
+
+    Container(pricing_svc, "Pricing Service", "Spring Boot", "Динамические тарифы")
+    ContainerDb(pricing_cache, "Pricing Cache", "Redis", "Кэш тарифов, мультипликаторы")
+    ContainerDb(pricing_db, "Pricing Database", "PostgreSQL 11", "Правила ценообразования")
+
+    Container(payment_svc, "Payment Service", "Spring Boot", "Транзакции, биллинг")
+    ContainerDb(payment_db, "Payment Database", "PostgreSQL 11", "Платежи, транзакции")
+
+    Container(notification_svc, "Notification Service", "Spring Boot", "Мультиканальные оповещения")
+    ContainerDb(notification_db, "Notification Database", "PostgreSQL 11", "Шаблоны, логи доставки")
+
+    Container(geography_svc, "Geography Service", "Spring Boot", "Маршруты, геокодинг")
+    ContainerDb(geography_search, "Geography Search", "Elasticsearch", "Геоиндексы, поиск")
+    ContainerDb(geography_db, "Geography Database", "PostgreSQL 11", "Зоны, справочники")
+
+    Container(fraud_svc, "Fraud Service", "Spring Boot", "Скоринг рисков")
+    ContainerDb(fraud_cache, "Fraud Cache", "Redis", "Real-time скоринг,黑名单")
+    ContainerDb(fraud_db, "Fraud Database", "PostgreSQL 11", "Правила фрода, алерты")
+
+    Container(analytics_svc, "Analytics Service", "Spring Boot", "BI, агрегация")
+    ContainerDb(analytics_olap, "Analytics Warehouse", "ClickHouse", "Аналитика, отчёты")
+
+    Container(monolith, "Legacy Monolith", "Django + PostgreSQL", "Поэтапно выводимый из эксплуатации")
+}
+
+System_Ext(yandex_pay, "Яндекс Пэй", "Платёжный шлюз")
+System_Ext(yandex_maps, "Яндекс Карты", "Картография")
+System_Ext(push_net, "FCM / APNS / Huawei", "Push-уведомления")
+
+' Клиенты → Gateway
+Rel(passenger, gateway, "Использует для заказа поездок", "REST /v1, /v2",)
+Rel(driver, gateway, "Использует для работы и получения выплат", "REST /v1, /v2",)
+Rel(manager, gateway, "Использует для управления счетами", "REST /v1, /v2",)
+Rel(accountant, gateway, "Контролирует выплаты через", "REST /v1, /v2",)
+
+' Gateway → Новые сервисы (v2)
+Rel(gateway, booking_svc, "/v2 → New Service", "HTTP/gRPC")
+Rel(gateway, driver_svc, "/v2 → New Service", "HTTP/gRPC")
+Rel(gateway, pricing_svc, "/v2 → New Service", "HTTP/gRPC")
+Rel(gateway, payment_svc, "/v2 → New Service", "HTTP/gRPC")
+Rel(gateway, notification_svc, "Async Dispatch", "HTTP")
+Rel(gateway, geography_svc, "/v2 → New Service", "HTTP/gRPC")
+Rel(gateway, fraud_svc, "Sync Pre-check", "HTTP/gRPC")
+Rel(gateway, analytics_svc, "Ingestion", "HTTP")
+
+' Strangler Fig: Fallback на монолит (v1)
+Rel(gateway, monolith, "/v1 → Legacy Fallback\n(Strangler + Feature Flags)", "HTTPS")
+
+' Сервисы → БД
+Rel(booking_svc, booking_db, "Read/Write", "SQL")
+Rel(driver_svc, driver_db, "Read/Write", "SQL")
+Rel(pricing_svc, pricing_cache, "Cache", "Redis")
+Rel(pricing_svc, pricing_db, "Read/Write", "SQL")
+Rel(payment_svc, payment_db, "Read/Write", "SQL")
+Rel(notification_svc, notification_db, "Read/Write", "SQL")
+Rel(geography_svc, geography_search, "Geo Search", "Elasticsearch")
+Rel(geography_svc, geography_db, "Read/Write", "SQL")
+Rel(fraud_svc, fraud_cache, "Real-time scoring", "Redis")
+Rel(fraud_svc, fraud_db, "Read/Write", "SQL")
+Rel(analytics_svc, analytics_olap, "OLAP Queries", "SQL")
+
+' Внешние интеграции
+Rel(booking_svc, yandex_pay, "Оплата", "HTTPS")
+Rel(geography_svc, yandex_maps, "Геокодинг", "HTTPS")
+Rel(notification_svc, push_net, "Отправка", "HTTPS")
+
+' Явное пояснение механизма
+Note as Note1
+**Обратная совместимость:**
+1. API Versioning (/v1 → /v2)
+2. Strangler Fig routing в Gateway
+3. Feature Flags для canary/tenant rollout
+4. Circuit Breaker → Fallback на Monolith
+5. Dual-write + CDC синхронизация БД
+end note
+
+Rel(gateway, Note1, "Управляет")
+
+LAYOUT_WITH_LEGEND()
+@enduml

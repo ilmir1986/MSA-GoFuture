@@ -1,0 +1,58 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+Person(passenger, "Пассажир")
+Person(driver, "Водитель")
+
+System_Boundary(gofuture, "GoFuture Platform — Security") {
+    Container(gateway, "API Gateway", "Spring Cloud Gateway")
+
+    ' Доменные сервисы с sidecar-прокси для mTLS
+    Container_Boundary(services, "Domain Services (mTLS via sidecars)") {
+        Container(booking_svc, "Booking Service", "Spring Boot + PostgreSQL")
+        Container(driver_svc, "Driver Service", "Spring Boot + PostgreSQL")
+        Container(pricing_svc, "Pricing Service", "Spring Boot + Redis")
+        Container(payment_svc, "Payment Service", "Spring Boot + PostgreSQL")
+    }
+
+    ' Security-компоненты
+    Container(waf, "WAF & DDoS", "Cloudflare / AWS WAF")
+    Container(vault, "Secrets Manager", "HashiCorp Vault")
+    Container(mesh_ctrl, "Service Mesh Control Plane", "Istio / Linkerd", "Policy + mTLS config")
+}
+
+' Поток запросов
+Rel(passenger, waf, "HTTPS")
+Rel(driver, waf, "HTTPS")
+Rel(waf, gateway, "Отфильтрованный трафик")
+Rel(gateway, services, "gRPC/HTTP")
+
+' Service Mesh: управление sidecar-прокси
+Rel(mesh_ctrl, services, "Внедряет sidecar-прокси и применяет политики")
+note right of services
+    Sidecar на каждый сервис:
+    • Шифрование mTLS
+    • Ретраи и таймауты
+    • RBAC-проверки
+end note
+
+' Управление секретами
+Rel(booking_svc, vault, "Запрос учётных данных БД", "HTTPS")
+Rel(driver_svc, vault, "Запрос API-ключей", "HTTPS")
+
+' Пояснения
+note right of waf
+    WAF + Rate Limiting + GeoIP-фильтрация
+end note
+note right of vault
+    Централизованное хранение секретов
+    Автоматическая ротация
+end note
+note right of mesh_ctrl
+    Zero-Trust архитектура:
+    • mTLS между сервисами
+    • Детальные политики доступа
+    • Шифрование трафика
+end note
+
+@enduml

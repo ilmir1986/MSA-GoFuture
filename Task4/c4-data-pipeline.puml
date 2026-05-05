@@ -1,0 +1,51 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+Person(data_eng, "Data Engineer")
+Person(ml_eng, "ML Engineer")
+Person(bi_analyst, "BI Analyst")
+
+System_Boundary(gofuture, "GoFuture Platform — Data Pipeline") {
+    Container(services, "Domain Microservices", "Spring Boot + PostgreSQL", "Booking, Driver, Pricing, Fraud...")
+    ContainerDb(kafka, "Kafka Raw Topics", "Apache Kafka", "Сырые события через Debezium CDC")
+
+    Container(flink, "Flink Stream Processor", "Apache Flink", "Real-time очистка, enrichment, оконные агрегации")
+    Container(spark, "Spark Batch Processor", "Apache Spark", "Периодический ETL, исторические витрины")
+
+    ContainerDb(feature_store, "Feature Store", "Redis / Feast", "Real-time фичи для ML-инференса")
+    ContainerDb(dwh, "Data Warehouse", "ClickHouse", "Аналитические витрины, BI-отчёты")
+
+    Container(ml_platform, "ML Platform", "MLflow / Serving", "Обучение моделей, Registry, Real-time Scoring")
+    Container(bi_tool, "BI Tool", "DataLens", "Дашборды, мониторинг KPI")
+}
+
+Rel(services, kafka, "CDC: поток сырых событий", "Debezium")
+Rel(kafka, flink, "Чтение потока для обработки", "Kafka Consumer")
+Rel(kafka, spark, "Пакетное чтение для ETL", "Kafka Consumer")
+
+Rel(flink, feature_store, "Обновление фичей в реальном времени", "Push/Update")
+Rel(flink, dwh, "Загрузка метрик в DWH", "Kafka Producer")
+Rel(spark, dwh, "Загрузка исторических агрегатов", "ETL Load")
+
+Rel(feature_store, ml_platform, "Real-time инференс", "gRPC/HTTP")
+Rel(dwh, ml_platform, "Обучение моделей", "Extract")
+Rel(dwh, bi_tool, "Аналитические запросы", "ClickHouse Driver")
+
+Rel(data_eng, spark, "Настройка ETL-задач")
+Rel(ml_eng, ml_platform, "Обучение и деплой моделей")
+Rel(bi_analyst, bi_tool, "Создание дашбордов")
+
+note right of flink
+    Потоковая обработка:
+    • Валидация схемы (Avro)
+    • Stateful join'ы (Driver + Booking)
+    • Оконные агрегации (3м/5м)
+end note
+
+note right of dwh
+    Хранилище для BI и ML:
+    • Партиционирование по дате/региону
+    • Материализованные представления
+    • Колоночное сжатие
+end note
+@enduml
